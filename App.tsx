@@ -95,7 +95,7 @@ const initialNodes: Node<PSDNodeData>[] = [
   {
     id: 'node-reviewer-1', // NEW NODE INSTANCE
     type: 'designReviewer',
-    position: { x: 2000, y: 100 }, // Positioned above export, after remapper
+    position: { x: 2200, y: 400 }, // Positioned above export, after remapper
     data: { 
         fileName: null, template: null, validation: null, designLayers: null,
         instanceCount: 1 
