@@ -22,7 +22,8 @@ import { ContainerResolverNode } from './components/ContainerResolverNode';
 import { RemapperNode } from './components/RemapperNode';
 import { DesignAnalystNode } from './components/DesignAnalystNode'; 
 import { ExportPSDNode } from './components/ExportPSDNode';
-import { KnowledgeNode } from './components/KnowledgeNode'; // NEW IMPORT
+import { KnowledgeNode } from './components/KnowledgeNode'; 
+import { DesignReviewerNode } from './components/DesignReviewerNode'; // NEW IMPORT
 import { ProjectControls } from './components/ProjectControls';
 import { PSDNodeData } from './types';
 import { ProceduralStoreProvider } from './store/ProceduralContext';
@@ -35,7 +36,7 @@ const initialNodes: Node<PSDNodeData>[] = [
     data: { fileName: null, template: null, validation: null, designLayers: null },
   },
   {
-    id: 'node-knowledge-1', // NEW KNOWLEDGE NODE
+    id: 'node-knowledge-1',
     type: 'knowledge',
     position: { x: 50, y: 350 },
     data: { fileName: null, template: null, validation: null, designLayers: null },
@@ -92,6 +93,16 @@ const initialNodes: Node<PSDNodeData>[] = [
     style: { width: 500 }
   },
   {
+    id: 'node-reviewer-1', // NEW NODE INSTANCE
+    type: 'designReviewer',
+    position: { x: 2000, y: 100 }, // Positioned above export, after remapper
+    data: { 
+        fileName: null, template: null, validation: null, designLayers: null,
+        instanceCount: 1 
+    },
+    style: { width: 480 }
+  },
+  {
     id: 'node-5',
     type: 'targetSplitter',
     position: { x: 1300, y: 50 },
@@ -100,7 +111,7 @@ const initialNodes: Node<PSDNodeData>[] = [
   {
     id: 'node-export-1',
     type: 'exportPsd',
-    position: { x: 2000, y: 400 },
+    position: { x: 2300, y: 400 }, // Shifted right to accommodate reviewer flow
     data: { fileName: null, template: null, validation: null, designLayers: null },
   }
 ];
@@ -186,6 +197,35 @@ const App: React.FC = () => {
                 }
             }
         }
+
+        // Design Reviewer Validation Rules (NEW)
+        if (targetNode.type === 'designReviewer') {
+            const handle = params.targetHandle || '';
+
+            if (handle.startsWith('payload-in')) {
+                // Accepts output from Remapper
+                if (sourceNode.type !== 'remapper') {
+                    console.warn("Reviewer 'Payload Input' requires a Remapper source.");
+                    return;
+                }
+            } else if (handle.startsWith('target-in')) {
+                // Accepts Target Splitter (context definition)
+                if (sourceNode.type !== 'targetSplitter') {
+                    console.warn("Reviewer 'Target Input' requires a Target Splitter.");
+                    return;
+                }
+            }
+        }
+
+        // Export Node Validation Update (NEW)
+        if (targetNode.type === 'exportPsd' && params.targetHandle?.startsWith('input-')) {
+            // Now accepts Reviewer as well
+            const allowedSources = ['remapper', 'designAnalyst', 'designReviewer', 'containerResolver'];
+            if (!allowedSources.includes(sourceNode.type || '')) {
+                console.warn(`Export Node input requires one of: ${allowedSources.join(', ')}`);
+                return;
+            }
+        }
       }
 
       // 2. Apply Connection
@@ -219,8 +259,9 @@ const App: React.FC = () => {
     containerResolver: ContainerResolverNode,
     remapper: RemapperNode,
     designAnalyst: DesignAnalystNode, 
+    designReviewer: DesignReviewerNode, // REGISTERED
     exportPsd: ExportPSDNode,
-    knowledge: KnowledgeNode, // REGISTERED
+    knowledge: KnowledgeNode,
   }), []);
 
   return (
