@@ -15,6 +15,10 @@ interface ProceduralState {
   // Maps NodeID -> HandleID -> Transformed Payload (Ready for Assembly)
   payloadRegistry: Record<string, Record<string, TransformedPayload>>;
 
+  // Maps NodeID -> HandleID -> Polished Payload (CARO Output)
+  // Stores the final refined transforms from Reviewer nodes
+  reviewerRegistry: Record<string, Record<string, TransformedPayload>>;
+
   // Maps NodeID -> HandleID -> LayoutStrategy (AI Analysis)
   analysisRegistry: Record<string, Record<string, LayoutStrategy>>;
 
@@ -30,6 +34,7 @@ interface ProceduralContextType extends ProceduralState {
   registerTemplate: (nodeId: string, template: TemplateMetadata) => void;
   registerResolved: (nodeId: string, handleId: string, context: MappingContext) => void;
   registerPayload: (nodeId: string, handleId: string, payload: TransformedPayload, masterOverride?: boolean) => void;
+  registerReviewerPayload: (nodeId: string, handleId: string, payload: TransformedPayload) => void;
   updatePayload: (nodeId: string, handleId: string, partial: Partial<TransformedPayload>) => void; 
   registerAnalysis: (nodeId: string, handleId: string, strategy: LayoutStrategy) => void;
   registerKnowledge: (nodeId: string, context: KnowledgeContext) => void;
@@ -138,6 +143,7 @@ export const ProceduralStoreProvider: React.FC<{ children: React.ReactNode }> = 
   const [templateRegistry, setTemplateRegistry] = useState<Record<string, TemplateMetadata>>({});
   const [resolvedRegistry, setResolvedRegistry] = useState<Record<string, Record<string, MappingContext>>>({});
   const [payloadRegistry, setPayloadRegistry] = useState<Record<string, Record<string, TransformedPayload>>>({});
+  const [reviewerRegistry, setReviewerRegistry] = useState<Record<string, Record<string, TransformedPayload>>>({});
   const [analysisRegistry, setAnalysisRegistry] = useState<Record<string, Record<string, LayoutStrategy>>>({});
   const [knowledgeRegistry, setKnowledgeRegistry] = useState<KnowledgeRegistry>({});
   const [globalVersion, setGlobalVersion] = useState<number>(0);
@@ -238,6 +244,32 @@ export const ProceduralStoreProvider: React.FC<{ children: React.ReactNode }> = 
     });
   }, []);
 
+  const registerReviewerPayload = useCallback((nodeId: string, handleId: string, payload: TransformedPayload) => {
+    setReviewerRegistry(prev => {
+        const nodeRecord = prev[nodeId] || {};
+        const currentPayload = nodeRecord[handleId];
+        
+        // Enforce Polished Flag for CARO output
+        const effectivePayload = { ...payload, isPolished: true };
+
+        // Use same reconciliation logic as standard payloads to handle generation IDs and stale updates
+        // This ensures downstream stability even for micro-adjustments
+        const reconciledPayload = reconcileTerminalState(effectivePayload, currentPayload);
+
+        if (currentPayload && JSON.stringify(currentPayload) === JSON.stringify(reconciledPayload)) {
+            return prev;
+        }
+
+        return {
+            ...prev,
+            [nodeId]: {
+                ...nodeRecord,
+                [handleId]: reconciledPayload
+            }
+        };
+    });
+  }, []);
+
   // NEW: Atomic Partial Update to prevent Stale Closures
   const updatePayload = useCallback((nodeId: string, handleId: string, partial: Partial<TransformedPayload>) => {
     setPayloadRegistry(prev => {
@@ -321,6 +353,7 @@ export const ProceduralStoreProvider: React.FC<{ children: React.ReactNode }> = 
     setTemplateRegistry(prev => { const { [nodeId]: _, ...rest } = prev; return rest; });
     setResolvedRegistry(prev => { const { [nodeId]: _, ...rest } = prev; return rest; });
     setPayloadRegistry(prev => { const { [nodeId]: _, ...rest } = prev; return rest; });
+    setReviewerRegistry(prev => { const { [nodeId]: _, ...rest } = prev; return rest; });
     setAnalysisRegistry(prev => { const { [nodeId]: _, ...rest } = prev; return rest; });
     
     // Explicitly clean up Knowledge Registry to ensure stale rules don't persist
@@ -345,6 +378,7 @@ export const ProceduralStoreProvider: React.FC<{ children: React.ReactNode }> = 
     templateRegistry,
     resolvedRegistry,
     payloadRegistry,
+    reviewerRegistry,
     analysisRegistry,
     knowledgeRegistry,
     globalVersion,
@@ -352,6 +386,7 @@ export const ProceduralStoreProvider: React.FC<{ children: React.ReactNode }> = 
     registerTemplate,
     registerResolved,
     registerPayload,
+    registerReviewerPayload,
     updatePayload, 
     registerAnalysis,
     registerKnowledge,
@@ -359,8 +394,8 @@ export const ProceduralStoreProvider: React.FC<{ children: React.ReactNode }> = 
     unregisterNode,
     triggerGlobalRefresh
   }), [
-    psdRegistry, templateRegistry, resolvedRegistry, payloadRegistry, analysisRegistry, knowledgeRegistry, globalVersion,
-    registerPsd, registerTemplate, registerResolved, registerPayload, updatePayload, registerAnalysis, registerKnowledge, updatePreview,
+    psdRegistry, templateRegistry, resolvedRegistry, payloadRegistry, reviewerRegistry, analysisRegistry, knowledgeRegistry, globalVersion,
+    registerPsd, registerTemplate, registerResolved, registerPayload, registerReviewerPayload, updatePayload, registerAnalysis, registerKnowledge, updatePreview,
     unregisterNode, triggerGlobalRefresh
   ]);
 

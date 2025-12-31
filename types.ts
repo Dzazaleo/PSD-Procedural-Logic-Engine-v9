@@ -80,6 +80,7 @@ export interface LayerOverride {
   xOffset: number;
   yOffset: number;
   individualScale: number;
+  rotation?: number; // Added for Reviewer Node support
 }
 
 export interface LayoutStrategy {
@@ -103,12 +104,18 @@ export interface LayoutStrategy {
   knowledgeMuted?: boolean; // Audit flag: Was knowledge explicitly ignored during this generation?
 }
 
+export interface ReviewerStrategy {
+    CARO_Audit: string; // Technical log for the Reviewer Node
+    overrides: LayerOverride[]; // Restricted geometric overrides
+}
+
 export interface TransformedLayer extends SerializableLayer {
   transform: {
     scaleX: number;
     scaleY: number;
     offsetX: number;
     offsetY: number;
+    rotation?: number; // Added for Reviewer Node support
   };
   children?: TransformedLayer[];
   generativePrompt?: string;
@@ -171,6 +178,7 @@ export interface TransformedPayload {
   sourceReference?: string; // Carried over from Strategy for Export/Gen use
   generationId?: number; // Timestamp of the specific generation to force React updates
   generationAllowed?: boolean; // New Flag: Per-instance enforcement state
+  isPolished?: boolean; // Flag indicating if this payload has been refined by CARO
 }
 
 export interface RemapperConfig {
@@ -198,6 +206,11 @@ export interface AnalystInstanceState {
   isKnowledgeMuted: boolean; // REQUIRED: Per-instance toggle to ignore global knowledge
 }
 
+export interface ReviewerInstanceState {
+  chatHistory: ChatMessage[];
+  reviewerStrategy: ReviewerStrategy | null;
+}
+
 export interface PSDNodeData {
   fileName: string | null;
   template: TemplateMetadata | null;
@@ -217,6 +230,7 @@ export interface PSDNodeData {
   
   // Multi-Instance Analysis State
   analystInstances?: Record<number, AnalystInstanceState>;
+  reviewerInstances?: Record<number, ReviewerInstanceState>; // Reviewer Node State
   
   // Legacy Single-Instance Fields (Kept for backward compatibility if needed, but deprecated)
   layoutStrategy?: LayoutStrategy | null; 
