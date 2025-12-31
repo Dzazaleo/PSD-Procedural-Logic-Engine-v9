@@ -664,6 +664,9 @@ export const DesignAnalystNode = memo(({ id, data }: NodeProps<PSDNodeData>) => 
         JSON OUTPUT RULES:
         - Leading reasoning must justify 'overrides' by citing specific brand constraints (if found) or expert intuition.
         - 'knowledgeApplied' must be set to true if Knowledge rules were explicitly used.
+        - RULE ATTRIBUTION: If 'knowledgeApplied' is true, every object in the 'overrides' array MUST include a 'citedRule' string (a concise summary of the specific brand rule applied).
+        - ANCHOR REFERENCING: If a visual anchor influenced the decision, include 'anchorIndex' (integer) referencing the 0-based index of the provided visual anchor.
+        - FALLBACK LOGIC: If a conflict exists between a textual rule and a visual anchor, prioritize the textual rule but note the conflict in the 'reasoning'.
         - Your 'overrides' must accurately map to the 'layerId' strings provided in the hierarchy.
     `;
     
@@ -720,13 +723,14 @@ export const DesignAnalystNode = memo(({ id, data }: NodeProps<PSDNodeData>) => 
             
             // A. Knowledge Anchors (Brand Context) - ONLY IF NOT MUTED
             if (effectiveKnowledge?.visualAnchors) {
-                effectiveKnowledge.visualAnchors.forEach(anchor => {
+                effectiveKnowledge.visualAnchors.forEach((anchor, idx) => {
+                    newParts.push({ text: `[VISUAL_ANCHOR_${idx}]` }); // Explicit indexing
                     newParts.push({
                         inlineData: { mimeType: anchor.mimeType, data: anchor.data }
                     });
                 });
                 if (effectiveKnowledge.visualAnchors.length > 0) {
-                    newParts.push({ text: "REFERENCED VISUAL ANCHORS (Strict Style & Layout Adherence Required):" });
+                    newParts.push({ text: "REFERENCED VISUAL ANCHORS (Strict Style & Layout Adherence Required. Reference by index in 'anchorIndex'):" });
                 }
             }
 
@@ -774,7 +778,9 @@ export const DesignAnalystNode = memo(({ id, data }: NodeProps<PSDNodeData>) => 
                                 layerId: { type: Type.STRING },
                                 xOffset: { type: Type.NUMBER },
                                 yOffset: { type: Type.NUMBER },
-                                individualScale: { type: Type.NUMBER }
+                                individualScale: { type: Type.NUMBER },
+                                citedRule: { type: Type.STRING, description: "Optional: Citation of the specific rule applied." },
+                                anchorIndex: { type: Type.INTEGER, description: "Optional: Index of the visual anchor referenced." }
                             },
                             required: ['layerId', 'xOffset', 'yOffset', 'individualScale']
                         }

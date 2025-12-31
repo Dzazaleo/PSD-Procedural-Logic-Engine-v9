@@ -3,7 +3,7 @@ import { Handle, Position, NodeProps, useEdges, useReactFlow, useNodes } from 'r
 import { PSDNodeData, SerializableLayer, TransformedPayload, TransformedLayer, MAX_BOUNDARY_VIOLATION_PERCENT, LayoutStrategy } from '../types';
 import { useProceduralStore } from '../store/ProceduralContext';
 import { GoogleGenAI } from "@google/genai";
-import { Check, Sparkles, Info, Layers, Box, Cpu } from 'lucide-react';
+import { Check, Sparkles, Info, Layers, Box, Cpu, BookOpen, Link as LinkIcon } from 'lucide-react';
 
 interface InstanceData {
   index: number;
@@ -171,6 +171,8 @@ interface OverrideMetric {
     deltaX: number;
     deltaY: number;
     scale: number;
+    citedRule?: string; // New: Textual rule attribution
+    anchorIndex?: number; // New: Visual anchor reference
 }
 
 const calculateOverrideMetrics = (
@@ -224,7 +226,9 @@ const calculateOverrideMetrics = (
                     finalY,
                     deltaX: finalX - geomX,
                     deltaY: finalY - geomY,
-                    scale: override.individualScale
+                    scale: override.individualScale,
+                    citedRule: override.citedRule,
+                    anchorIndex: override.anchorIndex
                 });
             }
 
@@ -259,7 +263,7 @@ const OverrideInspector = ({
                 </span>
                 <span className="text-[9px] text-pink-400/70 font-mono">{metrics.length} Layers</span>
             </div>
-            <div className="space-y-1 max-h-32 overflow-y-auto custom-scrollbar pr-1">
+            <div className="space-y-1 max-h-48 overflow-y-auto custom-scrollbar pr-1">
                 {metrics.map(m => (
                     <div key={m.layerId} className="flex flex-col bg-slate-900/40 p-1.5 rounded border border-pink-500/10">
                         <div className="flex justify-between items-center">
@@ -281,6 +285,28 @@ const OverrideInspector = ({
                                 </span>
                             </div>
                         </div>
+                        
+                        {/* New: Attribution UI */}
+                        {(m.citedRule || m.anchorIndex !== undefined) && (
+                            <div className="mt-1.5 pt-1.5 border-t border-slate-700/50 space-y-1">
+                                {m.citedRule && (
+                                    <div className="flex items-start gap-1">
+                                        <BookOpen className="w-2.5 h-2.5 text-teal-400 mt-0.5 shrink-0" />
+                                        <span className="text-[8px] text-teal-200/90 leading-tight italic">
+                                            "{m.citedRule}"
+                                        </span>
+                                    </div>
+                                )}
+                                {m.anchorIndex !== undefined && (
+                                    <div className="flex items-center gap-1 bg-black/20 px-1 py-0.5 rounded w-fit">
+                                        <LinkIcon className="w-2.5 h-2.5 text-blue-400" />
+                                        <span className="text-[8px] text-blue-300 font-mono">
+                                            Linked to Anchor #{m.anchorIndex}
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
                 ))}
             </div>

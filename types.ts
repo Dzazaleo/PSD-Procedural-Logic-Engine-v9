@@ -81,6 +81,8 @@ export interface LayerOverride {
   yOffset: number;
   individualScale: number;
   rotation?: number; // Added for Reviewer Node support
+  citedRule?: string; // Phase 4: Textual rule attribution
+  anchorIndex?: number; // Phase 4: Visual anchor reference index
 }
 
 export interface LayoutStrategy {
