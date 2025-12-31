@@ -23,7 +23,7 @@ import { RemapperNode } from './components/RemapperNode';
 import { DesignAnalystNode } from './components/DesignAnalystNode'; 
 import { ExportPSDNode } from './components/ExportPSDNode';
 import { KnowledgeNode } from './components/KnowledgeNode'; 
-import { DesignReviewerNode } from './components/DesignReviewerNode'; // NEW IMPORT
+import { DesignReviewerNode } from './components/DesignReviewerNode'; 
 import { ProjectControls } from './components/ProjectControls';
 import { PSDNodeData } from './types';
 import { ProceduralStoreProvider } from './store/ProceduralContext';
@@ -203,9 +203,9 @@ const App: React.FC = () => {
             const handle = params.targetHandle || '';
 
             if (handle.startsWith('payload-in')) {
-                // Accepts output from Remapper
-                if (sourceNode.type !== 'remapper') {
-                    console.warn("Reviewer 'Payload Input' requires a Remapper source.");
+                // Accepts output from Remapper OR Container Resolver (Direct Bridge Exception)
+                if (sourceNode.type !== 'remapper' && sourceNode.type !== 'containerResolver') {
+                    console.warn("Reviewer 'Payload Input' requires a Remapper or Container Resolver source.");
                     return;
                 }
             } else if (handle.startsWith('target-in')) {
@@ -217,12 +217,12 @@ const App: React.FC = () => {
             }
         }
 
-        // Export Node Validation Update (NEW)
+        // Export Node Validation Update (PHASE 4: STRICT GATE)
         if (targetNode.type === 'exportPsd' && params.targetHandle?.startsWith('input-')) {
-            // Now accepts Reviewer as well
-            const allowedSources = ['remapper', 'designAnalyst', 'designReviewer', 'containerResolver'];
-            if (!allowedSources.includes(sourceNode.type || '')) {
-                console.warn(`Export Node input requires one of: ${allowedSources.join(', ')}`);
+            // STRICT PRODUCTION GATE: Only accept DesignReviewer
+            if (sourceNode.type !== 'designReviewer') {
+                console.error(`[PIPELINE VIOLATION] Export Gate Locked. Input must come from 'DesignReviewer'. Attempted source: ${sourceNode.type}`);
+                alert("⛔ PIPELINE ENFORCEMENT: The Export Node strictly requires a 'Design Reviewer' connection. Direct connections from Remapper or Resolvers are prohibited in Production Mode.");
                 return;
             }
         }
@@ -259,7 +259,7 @@ const App: React.FC = () => {
     containerResolver: ContainerResolverNode,
     remapper: RemapperNode,
     designAnalyst: DesignAnalystNode, 
-    designReviewer: DesignReviewerNode, // REGISTERED
+    designReviewer: DesignReviewerNode,
     exportPsd: ExportPSDNode,
     knowledge: KnowledgeNode,
   }), []);

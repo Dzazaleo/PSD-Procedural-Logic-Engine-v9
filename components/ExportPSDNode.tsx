@@ -61,6 +61,41 @@ const base64ToCanvas = (base64: string, width: number, height: number): Promise<
     });
 };
 
+// Helper: Create a transformed version of a standard layer canvas (Rotation/Scale baking)
+const applyTransformToCanvas = (
+    sourceCanvas: HTMLCanvasElement | HTMLImageElement,
+    width: number,
+    height: number,
+    transform: { scaleX: number, scaleY: number, rotation?: number }
+): HTMLCanvasElement => {
+    // Create canvas based on target AABB dimensions
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return canvas;
+
+    // Center of new bounds
+    const cx = width / 2;
+    const cy = height / 2;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    if (transform.rotation) {
+        ctx.rotate((transform.rotation * Math.PI) / 180);
+    }
+    
+    // Draw centered. We assume 'width' and 'height' passed here are the destination dimensions
+    // and the source should be scaled to fit? 
+    // Actually, in our pipeline, 'transform.scaleX' was already applied to calculate 'width' and 'height' in the coordinates.
+    // But 'sourceCanvas' is the original raw pixels.
+    // So we draw sourceCanvas at -w/2, -h/2 with size w, h.
+    ctx.drawImage(sourceCanvas, -width / 2, -height / 2, width, height);
+
+    ctx.restore();
+    return canvas;
+};
+
 // Helper: Generate Image using GenAI SDK
 const generateLayerImage = async (
     prompt: string, 
@@ -126,8 +161,8 @@ export const ExportPSDNode = memo(({ id }: NodeProps) => {
 
   const edges = useEdges();
   
-  // Access global registries including resolvedRegistry for direct/analyst connections
-  const { psdRegistry, templateRegistry, payloadRegistry, resolvedRegistry } = useProceduralStore();
+  // Access global registries 
+  const { psdRegistry, templateRegistry, payloadRegistry, reviewerRegistry, resolvedRegistry } = useProceduralStore();
 
   // 1. Resolve Connected Target Template from Store via Edge Source
   const templateMetadata = useMemo(() => {
@@ -138,98 +173,59 @@ export const ExportPSDNode = memo(({ id }: NodeProps) => {
 
   const containers = templateMetadata?.containers || [];
 
-  // 2. Map Connections to Payloads with Adapter for ResolvedRegistry
+  // 2. Map Connections to Payloads (STRICT GATE LOGIC)
   const { slotConnections, validationErrors } = useMemo(() => {
     const map = new Map<string, TransformedPayload>();
     const errors: string[] = [];
     
     edges.forEach(edge => {
       if (edge.target !== id) return;
-      
-      // Look for edges connected to our dynamic input handles (e.g., input-SYMBOLS)
       if (!edge.targetHandle?.startsWith('input-')) return;
 
-      // Extract container name from handle ID (e.g. "SYMBOLS")
       const slotName = edge.targetHandle.replace('input-', '');
       
-      // 2A. Try Payload Registry First (Remapper Output - Higher Priority)
-      const nodePayloads = payloadRegistry[edge.source];
-      let payload = nodePayloads ? nodePayloads[edge.sourceHandle || ''] : undefined;
+      // PHASE 4: PRIORITY LOOKUP (Reviewer -> Error)
+      
+      // A. Check Reviewer Registry (Absolute Source of Truth)
+      const reviewerData = reviewerRegistry[edge.source];
+      let payload = reviewerData ? reviewerData[edge.sourceHandle || ''] : undefined;
 
-      // 2B. Try Resolved Registry Second (Design Analyst / Resolver Output)
+      // B. Fallback / Gate Check
       if (!payload) {
-          const nodeResolved = resolvedRegistry[edge.source];
-          const context = nodeResolved ? nodeResolved[edge.sourceHandle || ''] : undefined;
-          
-          if (context) {
-              // ADAPTER: Normalize MappingContext to TransformedPayload
-              // This allows the recursive reconstruction loop to handle both data types uniformly.
-              const isGenerativeDraft = !!context.previewUrl;
-              
-              // Normalize layers: add identity transform if missing
-              const normalizedLayers = context.layers.map(l => ({
-                  ...l,
-                  transform: { scaleX: 1, scaleY: 1, offsetX: l.coords.x, offsetY: l.coords.y }
-              })) as TransformedLayer[];
+          // If connection exists but no reviewer data, check if it came from a legacy source (Remapper/Resolver)
+          // If found in legacy registries but NOT reviewer, it means the user bypassed the gate.
+          const isRemapper = !!payloadRegistry[edge.source]?.[edge.sourceHandle || ''];
+          const isResolver = !!resolvedRegistry[edge.source]?.[edge.sourceHandle || ''];
 
-              // If we have a preview URL (Draft), inject a synthetic generative layer on top
-              if (isGenerativeDraft) {
-                  const genLayer: TransformedLayer = {
-                      id: `draft-gen-${slotName}`,
-                      name: '✨ AI Draft Preview',
-                      type: 'generative',
-                      isVisible: true,
-                      opacity: 1,
-                      coords: context.container.bounds,
-                      transform: { scaleX: 1, scaleY: 1, offsetX: context.container.bounds.x, offsetY: context.container.bounds.y },
-                      generativePrompt: "Draft Reconstruction" // Placeholder to trigger asset lookup
-                  };
-                  normalizedLayers.unshift(genLayer);
-              }
-
-              payload = {
-                  status: 'success',
-                  sourceNodeId: edge.source,
-                  sourceContainer: context.container.containerName,
-                  targetContainer: slotName,
-                  layers: normalizedLayers,
-                  scaleFactor: 1,
-                  metrics: { source: { w: 0, h: 0 }, target: { w: 0, h: 0 } },
-                  previewUrl: context.previewUrl,
-                  isConfirmed: true, // Treat direct connections from Resolved as validated intent
-                  isTransient: false
-              };
+          if (isRemapper || isResolver) {
+               errors.push(`Slot '${slotName}': PROCEDURAL_GATE_LOCKED. Content must be polished by Design Reviewer.`);
+               // Create dummy payload to render error state
+               payload = {
+                 status: 'error',
+                 sourceNodeId: edge.source,
+                 sourceContainer: 'Unknown',
+                 targetContainer: slotName,
+                 layers: [],
+                 scaleFactor: 1,
+                 metrics: { source: {w:0,h:0}, target: {w:0,h:0} }
+               };
           }
       }
 
       if (payload) {
-         // SOURCE OF TRUTH: Payload.targetContainer (or slot match)
-         // For Remapper, we check internal intent. For adapters, we trust the wiring.
-         const semanticTarget = payload.targetContainer;
-
-         if (semanticTarget === slotName || payload.sourceNodeId === edge.source) {
-             map.set(slotName, payload);
-             
-             if (payload.status === 'error') {
-                 errors.push(`Slot '${slotName}': Upstream generation error.`);
-             }
-         } else {
-             const msg = `PROCEDURAL VIOLATION: Payload targeting '${semanticTarget}' is miswired to slot '${slotName}'.`;
-             console.error(msg);
-             errors.push(msg);
+         if (payload.status !== 'error') {
+            map.set(slotName, payload);
          }
       }
     });
 
     return { slotConnections: map, validationErrors: errors };
-  }, [edges, id, payloadRegistry, resolvedRegistry]);
+  }, [edges, id, payloadRegistry, reviewerRegistry, resolvedRegistry]);
 
   // 3. Status Calculation
   const totalSlots = containers.length;
   const filledSlots = slotConnections.size;
   const isTemplateReady = !!templateMetadata;
-  
-  // PARTIAL SYNTHESIS LOGIC: Allow export if at least one slot is filled
   const isExportReady = isTemplateReady && filledSlots > 0 && validationErrors.length === 0;
   
   // 4. Export Logic
@@ -256,19 +252,12 @@ export const ExportPSDNode = memo(({ id }: NodeProps) => {
 
       for (const container of containers) {
           const payload = slotConnections.get(container.name);
-          
-          // Skip empty slots gracefully
           if (!payload) continue;
           
-          // Recursive search for generative layers in the Transformed Tree
           const findGenerativeLayers = (layers: TransformedLayer[]) => {
               for (const layer of layers) {
                   // FILTER: Only process generative layers if they are CONFIRMED
                   if (layer.type === 'generative' && layer.generativePrompt && payload.isConfirmed) {
-                      // LOOKUP PRIORITY:
-                      // 1. Payload Preview URL (The "Baked" Asset from History/Confirmation)
-                      // 2. Re-generation (Fallback)
-                      
                       if (payload.previewUrl) {
                           const task = async () => {
                               try {
@@ -286,8 +275,6 @@ export const ExportPSDNode = memo(({ id }: NodeProps) => {
                           };
                           generationTasks.push(task());
                       } else {
-                          // If no preview but marked generative, try to generate (Emergency Fallback)
-                          console.warn(`[Export] Warning: Missing preview for ${layer.id}. Attempting synthesis.`);
                           const task = async () => {
                               const canvas = await generateLayerImage(
                                   layer.generativePrompt!, 
@@ -301,10 +288,7 @@ export const ExportPSDNode = memo(({ id }: NodeProps) => {
                           };
                           generationTasks.push(task());
                       }
-                  } else if (layer.type === 'generative' && !payload.isConfirmed) {
-                      console.warn(`[Export] Skipping unconfirmed generative layer: ${layer.name}`);
                   }
-
                   if (layer.children) findGenerativeLayers(layer.children);
               }
           };
@@ -319,7 +303,7 @@ export const ExportPSDNode = memo(({ id }: NodeProps) => {
           await Promise.all(generationTasks);
       }
 
-      // C. Assembly Phase: Reconstruct Hierarchy
+      // C. Assembly Phase: Reconstruct Hierarchy with Rotation/Scale Banking
       setExportStatus('Assembling PSD structure...');
 
       const reconstructHierarchy = (
@@ -335,7 +319,6 @@ export const ExportPSDNode = memo(({ id }: NodeProps) => {
             // BRANCH 1: Generative Layer (Synthetic)
             if (metaLayer.type === 'generative') {
                 const asset = assets.get(metaLayer.id);
-                // Only add if asset exists (implicitly checks confirmed status via asset generation loop)
                 if (asset) {
                     newLayer = {
                         name: metaLayer.name,
@@ -349,22 +332,36 @@ export const ExportPSDNode = memo(({ id }: NodeProps) => {
                     };
                 }
             } 
-            // BRANCH 2: Standard Layer (Clone from Source)
+            // BRANCH 2: Standard Layer (Clone + Raster Transform)
             else if (sourcePsd) {
-                // Determine Source Layer Path ID
-                // The metaLayer.id corresponds to the deterministic path in the source binary
                 const originalLayer = findLayerByPath(sourcePsd, metaLayer.id);
                 
                 if (originalLayer) {
+                    // Check if CARO applied overrides requiring raster bake (Rotation)
+                    const hasRotation = !!metaLayer.transform.rotation && metaLayer.transform.rotation !== 0;
+                    
+                    let bakedCanvas = originalLayer.canvas;
+
+                    // If rotation exists, we must re-rasterize the original canvas into a transformed state
+                    if (originalLayer.canvas && (hasRotation || metaLayer.transform.scaleX !== 1)) {
+                         bakedCanvas = applyTransformToCanvas(
+                             originalLayer.canvas as HTMLCanvasElement, 
+                             metaLayer.coords.w, 
+                             metaLayer.coords.h, 
+                             metaLayer.transform
+                         );
+                    }
+
                     newLayer = {
-                        ...originalLayer, // PRESERVE PROPERTIES from Binary
+                        ...originalLayer, // Copy metadata
                         top: metaLayer.coords.y,
                         left: metaLayer.coords.x,
                         bottom: metaLayer.coords.y + metaLayer.coords.h,
                         right: metaLayer.coords.x + metaLayer.coords.w,
                         hidden: !metaLayer.isVisible,
                         opacity: metaLayer.opacity * 255,
-                        children: undefined
+                        children: undefined,
+                        canvas: bakedCanvas
                     };
                     
                     if (metaLayer.type === 'group' && metaLayer.children) {
@@ -386,9 +383,7 @@ export const ExportPSDNode = memo(({ id }: NodeProps) => {
       for (const container of containers) {
           const payload = slotConnections.get(container.name);
           
-          // PARTIAL SYNTHESIS: Only include populated containers
           if (payload) {
-              // Retrieve Source Binary for cloning standard layers
               const sourcePsd = psdRegistry[payload.sourceNodeId];
               
               const reconstructedContent = reconstructHierarchy(
@@ -423,7 +418,6 @@ export const ExportPSDNode = memo(({ id }: NodeProps) => {
         setExportError(e.message || "Unknown export error");
     } finally {
         setIsExporting(false);
-        // Reset status after a short delay
         setTimeout(() => setExportStatus('Idle'), 3000);
     }
   };
@@ -445,7 +439,6 @@ export const ExportPSDNode = memo(({ id }: NodeProps) => {
              </div>
          </div>
          
-         {/* Template Input Handle & Status */}
          <div className="relative pl-4 py-1 flex items-center">
              <Handle 
                type="target" 
@@ -470,8 +463,9 @@ export const ExportPSDNode = memo(({ id }: NodeProps) => {
               containers.map(container => {
                   const isFilled = slotConnections.has(container.name);
                   const payload = slotConnections.get(container.name);
-                  const isGen = payload?.requiresGeneration || payload?.previewUrl; // Drafts also count as gen
+                  const isGen = payload?.requiresGeneration || payload?.previewUrl; 
                   const isConfirmed = payload?.isConfirmed;
+                  const isPolished = payload?.isPolished;
 
                   return (
                       <div 
@@ -482,14 +476,13 @@ export const ExportPSDNode = memo(({ id }: NodeProps) => {
                             : 'bg-slate-800/50 border-slate-700/50'
                         }`}
                       >
-                          {/* Dynamic Handle for each container slot */}
                           <Handle 
                             type="target" 
                             position={Position.Left} 
                             id={`input-${container.name}`}
                             className={`!w-3 !h-3 !-left-1.5 !border-2 transition-colors duration-200 ${
                                 isFilled 
-                                ? '!bg-indigo-500 !border-white' // High contrast white border when active
+                                ? '!bg-indigo-500 !border-white' 
                                 : '!bg-slate-700 !border-slate-500'
                             }`}
                             title={`Input for ${container.name}`} 
@@ -499,21 +492,24 @@ export const ExportPSDNode = memo(({ id }: NodeProps) => {
                               <span className={`text-xs font-medium truncate ${isFilled ? 'text-indigo-200' : 'text-slate-400'}`}>
                                   {container.name}
                               </span>
-                              {isGen && (
-                                  <div className="flex items-center space-x-1 mt-0.5">
+                              <div className="flex items-center space-x-1.5 mt-0.5">
+                                  {isGen && (
                                       <span className="text-[8px] text-purple-400 font-mono leading-none">
-                                          ✨ AI GENERATION
+                                          ✨ AI
                                       </span>
-                                      {!isConfirmed && (
-                                          <span className="text-[8px] text-yellow-500 font-bold leading-none" title="Not Confirmed (Will Fallback)">
-                                              (UNCONFIRMED)
-                                          </span>
-                                      )}
-                                  </div>
-                              )}
+                                  )}
+                                  {isPolished ? (
+                                      <span className="text-[8px] bg-emerald-500/20 text-emerald-300 px-1 rounded border border-emerald-500/30 leading-none">
+                                          POLISHED
+                                      </span>
+                                  ) : isFilled ? (
+                                      <span className="text-[8px] text-yellow-500 font-bold leading-none">
+                                          UNPOLISHED
+                                      </span>
+                                  ) : null}
+                              </div>
                           </div>
                           
-                          {/* Visual Indicator */}
                           {isFilled ? (
                               <svg className="w-3 h-3 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -536,7 +532,6 @@ export const ExportPSDNode = memo(({ id }: NodeProps) => {
               </span>
           </div>
 
-          {/* Validation Errors Display */}
           {validationErrors.length > 0 && (
                <div className="mb-2 p-2 bg-orange-900/30 border border-orange-800/50 rounded space-y-1">
                    {validationErrors.map((err, i) => (
